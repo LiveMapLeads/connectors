@@ -30,6 +30,15 @@ delivery. An **instant** (webhook) variant is a drop-in upgrade when Live Map Le
 push: only [`src/lib/triggers/new-search-completed.ts`](src/lib/triggers/new-search-completed.ts)
 changes its trigger strategy — the action, the API client, and the connection stay as they are.
 
+### Known limit
+
+Each poll fetches the newest 100 completed searches (the API maximum; the API has no forward
+pagination). If **more than 100** of your searches were to complete inside a single polling
+interval, the overflow beyond the newest 100 would not be emitted. This is the upstream API's
+accepted polling residual and is effectively unreachable in practice — an account runs one
+search at a time, so a poll interval can't accumulate 100+ completions. The instant (webhook)
+trigger removes the ceiling entirely.
+
 ## Develop
 
 ```bash

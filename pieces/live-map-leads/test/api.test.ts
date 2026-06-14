@@ -36,10 +36,17 @@ describe('resolveApiKey', () => {
     expect(resolveApiKey({ type: 'SECRET_TEXT', secret_text: 'abc' })).toBe('abc');
   });
 
-  it('throws on a missing/empty key', () => {
+  it('trims surrounding whitespace from the key', () => {
+    expect(resolveApiKey('  abc  ')).toBe('abc');
+    expect(resolveApiKey({ secret_text: '  abc  ' })).toBe('abc');
+  });
+
+  it('throws on a missing/empty/whitespace-only key', () => {
     expect(() => resolveApiKey(undefined)).toThrow(/Missing/);
     expect(() => resolveApiKey('')).toThrow(/Missing/);
+    expect(() => resolveApiKey('   ')).toThrow(/Missing/);
     expect(() => resolveApiKey({ secret_text: '' })).toThrow(/Missing/);
+    expect(() => resolveApiKey({ secret_text: '   ' })).toThrow(/Missing/);
   });
 });
 

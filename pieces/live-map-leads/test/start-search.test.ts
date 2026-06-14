@@ -23,6 +23,14 @@ describe('buildStartSearchBody', () => {
     expect(() => buildStartSearchBody({ searchTerms: undefined, location: 'Austin' })).toThrow();
   });
 
+  it('trims the location and throws on a whitespace-only location', () => {
+    expect(buildStartSearchBody({ searchTerms: ['cafe'], location: '  Lyon  ' })).toEqual({
+      searchStrings: ['cafe'],
+      locationQuery: 'Lyon',
+    });
+    expect(() => buildStartSearchBody({ searchTerms: ['cafe'], location: '   ' })).toThrow(/location/);
+  });
+
   it('includes optional fields only when set', () => {
     const body = buildStartSearchBody({
       searchTerms: ['cafe'],

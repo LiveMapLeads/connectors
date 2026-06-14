@@ -21,17 +21,16 @@ export type V1Client = Client<paths>;
  * Activepieces versions. Throws if neither form yields a non-empty key.
  */
 export function resolveApiKey(auth: unknown): string {
-  if (typeof auth === 'string' && auth.length > 0) {
-    return auth;
+  if (typeof auth === 'string') {
+    const key = auth.trim();
+    if (key.length > 0) return key;
   }
-  if (
-    auth &&
-    typeof auth === 'object' &&
-    'secret_text' in auth &&
-    typeof (auth as { secret_text: unknown }).secret_text === 'string' &&
-    (auth as { secret_text: string }).secret_text.length > 0
-  ) {
-    return (auth as { secret_text: string }).secret_text;
+  if (auth && typeof auth === 'object' && 'secret_text' in auth) {
+    const raw = (auth as { secret_text: unknown }).secret_text;
+    if (typeof raw === 'string') {
+      const key = raw.trim();
+      if (key.length > 0) return key;
+    }
   }
   throw new Error('Missing Live Map Leads API key. Reconnect your account in the connection settings.');
 }

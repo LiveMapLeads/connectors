@@ -34,6 +34,14 @@ export async function pollCompletedSearches(
 ): Promise<{ epochMilliSeconds: number; data: unknown }[]> {
   const since = lastFetchEpochMS > 0 ? new Date(lastFetchEpochMS).toISOString() : undefined;
   const page = await listCompletedSearches(resolveApiKey(auth), { since, limit: MAX_LIST_LIMIT });
+  // One page (the newest MAX_LIST_LIMIT, the API maximum) per poll. The API exposes no
+  // forward pagination — only `since` + `limit` (≤100) + `hasMore` — so if MORE than 100
+  // searches completed since the last poll, the page is truncated to the newest 100 and the
+  // older overflow is not emitted (the time cursor advances past them). This is the upstream
+  // API's documented, accepted polling residual ("rare for a single account") and is bounded
+  // to near-impossible here: an account runs one search at a time (each takes seconds to
+  // minutes), so >100 completing inside one poll interval cannot realistically occur. The
+  // instant (webhook) trigger upgrade removes the ceiling entirely. See README § Known limits.
   return page.data.map((search) => ({
     epochMilliSeconds: Date.parse(search.completedAt),
     data: search,

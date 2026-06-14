@@ -44,9 +44,14 @@ export function buildStartSearchBody(props: StartSearchProps): StartSearchBody {
     throw new Error('Enter at least one search term, e.g. "dentist".');
   }
 
+  const location = (props.location ?? '').trim();
+  if (location.length === 0) {
+    throw new Error('Enter a location, e.g. "Austin, TX".');
+  }
+
   const body: StartSearchBody = {
     searchStrings,
-    locationQuery: props.location,
+    locationQuery: location,
   };
 
   if (props.maxResults != null) body.maxResults = props.maxResults;
