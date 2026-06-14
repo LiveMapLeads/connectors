@@ -1,0 +1,446 @@
+# Live Map Leads — Public API (v1)
+#
+# SINGLE SOURCE OF TRUTH for the public /api/v1 surface (Phase 24.2).
+# Hand-authored, spec-first: the route handlers in src/app/api/v1/** and every
+# connector client (Activepieces / Zapier / n8n) are written/generated to MATCH
+# this file — it is NOT route-derived. Pick one direction to avoid drift; this
+# is the direction. Served verbatim at GET /api/v1/openapi.yaml.
+#
+# Scope (Phase 24.2): exactly the two operations the polling connector needs —
+# start a search + list completed searches. NOT the whole future developer REST
+# API (product-scope item 6 extends this later). The single-job detail route
+# (GET /api/v1/jobs/{id}) + add-on/enrichment fields are deliberately DEFERRED
+# to Phase 24.5 (see the "Deferred from v1" notes below).
+#
+# `categories` is modelled as a plain string[] (NOT an inline 4,036-value enum):
+# the list is versioned with the data provider and single-sourced in
+# src/lib/apify-categories.ts, so inlining it here would fork that source and
+# bloat both the spec and the generated TS union. The intended mechanism for a
+# connector category PICKER is a future dynamic-options endpoint
+# (GET /api/v1/categories, served live from the vendored list) wired to each
+# platform's dynamic-dropdown feature — DEFERRED until an adapter needs it
+# (24.4/24.5); the minimal trigger+action does not.
+#
+# Money path is UNCHANGED (decisions #1/#2/#11 not reopened): POST /api/v1/jobs
+# reuses the EXACT internal job-start path (handleStartJob) — budget cap, the
+# one-run-at-a-time lock, Fair-Play limits, cancel/stall, and charge-on-success
+# settlement are all inherited. Credits are reserved ASYNCHRONOUSLY by the
+# ExtractionWorkflow's reserve step (decision #7), so a valid+authed POST always
+# returns 202; insufficient credits surface later as a job with status "failed".
+
+openapi: 3.1.0
+info:
+  title: Live Map Leads API
+  version: "1.0.0"
+  summary: Start local-business searches and collect their results programmatically.
+  description: |
+    Pull filtered local-business lists from map data and download them as CSV,
+    XLSX, or JSON — from your own code or a no-code automation platform
+    (Activepieces, Zapier, n8n, Make).
+
+    **Authentication.** Every request needs your API key in the `x-api-key`
+    header. Create and revoke keys in your account settings. A key acts on
+    behalf of the account that created it and can both start searches (which
+    spend credits) and read that account's results — keep it secret.
+
+    **How it works.** Searches run in the background. `POST /jobs` starts one and
+    returns immediately with a `jobId` and `status: "queued"`. Poll
+    `GET /jobs?status=completed&since=<timestamp>` to pick up searches as they
+    finish; each finished search carries ready-to-use download links.
+
+    **Billing.** You are charged only for records actually returned
+    (charge-on-success) — never for a search that fails. Credits are reserved
+    when the search runs, not when you call `POST /jobs`, so a request with too
+    few credits still returns `202` and then completes with `status: "failed"`.
+  contact:
+    name: Live Map Leads Support
+    url: https://livemapleads.com/support
+  license:
+    name: Proprietary
+    url: https://livemapleads.com/terms
+
+servers:
+  - url: https://livemapleads.com/api/v1
+    description: Production
+  - url: https://staging.livemapleads.com/api/v1
+    description: Staging (gated by Cloudflare Access)
+
+security:
+  - ApiKeyAuth: []
+
+tags:
+  - name: Searches
+    description: Start searches and collect their results.
+
+paths:
+  /jobs:
+    post:
+      operationId: startSearch
+      tags: [Searches]
+      summary: Start a search
+      description: |
+        Start a new local-business search. Returns immediately with a `jobId`
+        and `status: "queued"`; the search runs in the background. Watch for it
+        to finish via `GET /jobs?status=completed&since=…`.
+
+        Provide a location as **exactly one** of `locationQuery` (text) or
+        `customGeolocation` (a drawn area) — one is required, and supplying both
+        is rejected.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartSearchRequest"
+      responses:
+        "202":
+          description: Search accepted and queued.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StartSearchResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    get:
+      operationId: listSearches
+      tags: [Searches]
+      summary: List completed searches
+      description: |
+        List the calling account's completed searches, newest first, each with
+        its result count and download links. Only the calling account's own
+        searches are ever returned — no cross-account identifiers are exposed.
+        This is the polling source for a "New search completed" automation
+        trigger.
+
+        For incremental polling, pass `since` = the most recent `completedAt` you
+        have already seen; the response returns only searches that finished
+        strictly after it, ordered by `completedAt` descending. De-duplicate by
+        the stable `jobId`. See `hasMore` for the rare case where a single page
+        does not cover everything since `since`.
+      parameters:
+        - name: status
+          in: query
+          required: false
+          description: |
+            Lifecycle filter. v1 supports only `completed` (the value a polling
+            trigger needs); it is also the default.
+          schema:
+            type: string
+            enum: [completed]
+            default: completed
+        - name: since
+          in: query
+          required: false
+          description: >
+            Return only searches that completed strictly after this RFC 3339
+            timestamp. Omit on the first poll.
+          schema:
+            type: string
+            format: date-time
+          example: "2026-06-12T00:00:00Z"
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of searches to return.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        "200":
+          description: A page of completed searches, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchList"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+
+# This document is itself served (unauthenticated) at GET /api/v1/openapi.yaml —
+# see the header note. It is deliberately NOT modelled as an operation here: it is
+# not a connector action, and listing it would emit a spurious `getOpenApiSpec`
+# action in every generated client.
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: x-api-key
+      description: >
+        Your account API key. Create or revoke keys in account settings. The key
+        is shown once at creation and stored hashed — keep a copy.
+
+  responses:
+    BadRequest:
+      description: >
+        The request body or query failed validation (e.g. unknown category, both
+        location forms supplied, value out of range).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "invalid_request"
+            message: "Provide exactly one of locationQuery or customGeolocation."
+    Unauthorized:
+      description: Missing, invalid, or revoked API key.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "unauthorized"
+            message: "Missing or invalid API key."
+    TooManyRequests:
+      description: Rate limit exceeded for this key.
+      headers:
+        Retry-After:
+          description: Seconds to wait before retrying.
+          schema:
+            type: integer
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error: "rate_limited"
+            message: "Too many requests. Retry after the indicated delay."
+
+  schemas:
+    StartSearchRequest:
+      type: object
+      required: [searchStrings]
+      additionalProperties: false
+      description: |
+        Search definition. `additionalProperties: false` is a HARD part of the
+        contract: the v1 route MUST validate against this restricted field set and
+        reject any other field — it must NOT forward the raw body to the full
+        internal search schema. That internal schema also accepts add-on /
+        enrichment toggles (reviews, images, extra details — each billable),
+        premium / personal-data add-ons, and webhook routing (`deliverTo`); all of
+        those are DEFERRED from v1 (Phase 24.5) and MUST stay unreachable through
+        this endpoint (no billable add-on or personal-data path via v1). The field
+        names that DO appear here match the internal schema so the validated subset
+        maps onto the existing job-start path with no new credit logic. Exactly one
+        of `locationQuery` or `customGeolocation` is required.
+      properties:
+        searchStrings:
+          type: array
+          description: >
+            One or more search terms, e.g. "dentist" or "italian restaurant".
+            Each term runs against the location.
+          items:
+            type: string
+            minLength: 1
+          minItems: 1
+          maxItems: 20
+          example: ["dentist"]
+        locationQuery:
+          type: string
+          description: >
+            Free-text location, e.g. "Austin, TX" or "Lyon, France". Mutually
+            exclusive with `customGeolocation`.
+          minLength: 1
+          maxLength: 200
+          example: "Austin, TX"
+        customGeolocation:
+          $ref: "#/components/schemas/GeoArea"
+        language:
+          type: string
+          description: Result language as a BCP-47 code.
+          minLength: 2
+          maxLength: 10
+          default: "en"
+        maxResults:
+          type: integer
+          description: Optional cap on the number of places returned per search term.
+          minimum: 1
+          maximum: 75000
+        nameMatch:
+          type: string
+          description: >
+            How a business name must match your search term. `all` = no name
+            filter; `contains` = name contains the term; `exact` = name equals
+            the term.
+          enum: [all, contains, exact]
+          default: all
+        website:
+          type: string
+          description: >
+            Filter by website presence. `any` = no filter; `with` = only places
+            that have a website; `without` = only places that do not.
+          enum: [any, with, without]
+          default: any
+        categories:
+          type: array
+          description: >
+            Restrict results to these business categories, e.g. "dentist" or
+            "art gallery". Values are lowercase and must each be a recognised
+            category — an unknown value is rejected with 400. The recognised set
+            is large (thousands of entries) and is versioned with the data
+            provider, so it is not enumerated inline here; a future
+            GET /api/v1/categories endpoint will expose the current list for
+            connector dropdowns. Omit this field to apply no category filter.
+          items:
+            type: string
+          uniqueItems: true
+          maxItems: 50
+        skipClosed:
+          type: boolean
+          description: Exclude permanently or temporarily closed places.
+          default: false
+        capCredits:
+          type: integer
+          description: >
+            Optional per-search spending ceiling, in credits. The search stops
+            before exceeding it. Recommended for unattended automations.
+          minimum: 1
+
+    GeoArea:
+      type: object
+      description: >
+        A drawn search area as GeoJSON. Coordinates are [longitude, latitude]
+        pairs. Mutually exclusive with `locationQuery`.
+      required: [type, coordinates]
+      properties:
+        type:
+          type: string
+          enum: [Polygon, MultiPolygon]
+        coordinates:
+          description: >
+            GeoJSON coordinate array. For `Polygon`: an array of linear rings
+            (each an array of [lng, lat] positions). For `MultiPolygon`: an array
+            of polygons.
+          type: array
+          items: {}
+      additionalProperties: false
+
+    StartSearchResponse:
+      type: object
+      required: [jobId, status]
+      properties:
+        jobId:
+          type: string
+          format: uuid
+          description: Unique identifier for the search. Use it to match results later.
+          example: "8f1d6c2a-3b4e-4f7a-9c1d-2e3f4a5b6c7d"
+        status:
+          type: string
+          enum: [queued]
+          description: Always "queued" on a successful start.
+      example:
+        jobId: "8f1d6c2a-3b4e-4f7a-9c1d-2e3f4a5b6c7d"
+        status: "queued"
+
+    SearchList:
+      type: object
+      required: [data, hasMore]
+      properties:
+        data:
+          type: array
+          description: Completed searches, newest first.
+          items:
+            $ref: "#/components/schemas/SearchSummary"
+        hasMore:
+          type: boolean
+          description: >
+            True when more completed searches matched than fit in `limit` — the
+            page was truncated to the newest `limit`. Rare for a single account.
+            To retrieve the remainder, repeat the call with a larger `limit` (max
+            100) and the SAME `since`; only advance `since` to the newest
+            `completedAt` you have seen once `hasMore` is false. Advancing `since`
+            while `hasMore` is true would skip the older, un-returned searches.
+            Results are de-duplicated by `jobId` regardless.
+
+    SearchSummary:
+      type: object
+      required: [jobId, status, recordCount, creditsCharged, completedAt, downloads]
+      description: >
+        A finished search. Mirrors the fields delivered to outbound webhooks
+        (Phase 23), the existing "completed search" payload.
+      properties:
+        jobId:
+          type: string
+          format: uuid
+          description: Stable identifier — use it as the de-duplication key when polling.
+        status:
+          type: string
+          enum: [completed]
+          description: >
+            Always `completed` for this endpoint (it lists completed searches);
+            maps from the internal `complete` state. The full public lifecycle
+            (`queued`/`running`/`completed`/`cancelled`/`failed`, mapping from the
+            internal `queued`/`running`/`complete`/`aborted`/`failed`+`timed_out`)
+            arrives with the single-search detail route in a later phase (24.5).
+        recordCount:
+          type: integer
+          description: Number of business records the search returned.
+          minimum: 0
+        creditsCharged:
+          type: integer
+          description: Credits charged for this search (charge-on-success).
+          minimum: 0
+        completedAt:
+          type: string
+          format: date-time
+          description: When the search finished (RFC 3339).
+        downloads:
+          description: >
+            Ready-to-use download links, one per format. Each is a signed,
+            time-limited URL (about 7 days) that needs no API key. Null if
+            download links are unavailable for this search.
+          oneOf:
+            - $ref: "#/components/schemas/Downloads"
+            - type: "null"
+        summary:
+          type: string
+          description: Short human-readable summary of the result.
+          example: "Your search finished with 142 records."
+      example:
+        jobId: "8f1d6c2a-3b4e-4f7a-9c1d-2e3f4a5b6c7d"
+        status: "completed"
+        recordCount: 142
+        creditsCharged: 142
+        completedAt: "2026-06-12T14:22:05Z"
+        downloads:
+          csv: "https://livemapleads.com/api/exports/download?token=eyJhbGciOi..."
+          xlsx: "https://livemapleads.com/api/exports/download?token=eyJhbGciOi..."
+          json: "https://livemapleads.com/api/exports/download?token=eyJhbGciOi..."
+        summary: "Your search finished with 142 records."
+
+    Downloads:
+      type: object
+      description: Signed, time-limited download URLs by format. No API key needed to fetch.
+      properties:
+        csv:
+          type: string
+          format: uri
+        xlsx:
+          type: string
+          format: uri
+        json:
+          type: string
+          format: uri
+      additionalProperties: false
+
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error:
+          type: string
+          description: Stable machine-readable error code.
+          example: "invalid_request"
+        message:
+          type: string
+          description: Human-readable explanation. Do not parse — read `error`.
