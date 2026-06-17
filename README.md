@@ -10,13 +10,17 @@ from it, so nothing here re-describes request or response shapes by hand.
 
 | Connector | Status | Location |
 |-----------|--------|----------|
-| **Activepieces** | Available (polling) | [`pieces/live-map-leads`](pieces/live-map-leads) |
-| Zapier | Planned | — |
-| n8n | Planned | — |
+| **Activepieces** | Available (polling) | [`activepieces/`](activepieces) |
+| Zapier | Planned | `zapier/` |
+| n8n | Planned | `n8n/` |
+
+Each platform's connector is its own independently-published npm package in its own top-level
+directory (`activepieces/`, `n8n/`, `zapier/`); a shared `connector-core/` is extracted once a
+second adapter proves what's genuinely shared.
 
 This repository is **public and MIT-licensed on purpose**: a verified n8n community node
-requires a public repo + MIT + npm provenance, so the connectors live here rather than in the
-proprietary app.
+requires a public repo + MIT + npm provenance (per-package, satisfiable from a subdirectory of
+this monorepo), so the connectors live here rather than in the proprietary app.
 
 ## License
 
