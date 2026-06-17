@@ -1,0 +1,43 @@
+# Publish @livemapleads/piece-live-map-leads to npm via Trusted Publishing (OIDC).
+#
+# No npm token lives anywhere: GitHub Actions mints a short-lived OIDC credential that
+# npm trusts for THIS repo + THIS workflow (configure the trusted publisher once in the
+# npm package settings — see PUBLISHING.md). Provenance is attached automatically.
+#
+# To release a new version:
+#   1. Bump the version in activepieces/package.json (npm won't republish an existing one).
+#   2. Merge to main.
+#   3. Either run this workflow manually (Actions → "Publish — Activepieces piece" → Run
+#      workflow, on main) OR push a tag `activepieces-v<version>`.
+name: Publish — Activepieces piece
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'activepieces-v*'
+
+permissions:
+  contents: read
+  id-token: write # REQUIRED for npm Trusted Publishing (OIDC) + provenance
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: activepieces
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+      # Trusted Publishing (OIDC) needs a recent npm (>= 11.5.1); Node 22 ships npm 10.x.
+      - name: Use a Trusted-Publishing-capable npm
+        run: npm install -g npm@latest
+      - run: npm ci
+      # Full gate before shipping (typecheck + lint + mocked tests + build). Tests use a
+      # stubbed fetch, so this spends no API credits.
+      - run: npm run check
+      - run: npm publish --provenance --access public

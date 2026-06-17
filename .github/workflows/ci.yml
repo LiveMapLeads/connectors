@@ -1,0 +1,26 @@
+# Per-package gate on every PR / push to main. Path-filtered so a package's CI only runs
+# when that package changes (this repo holds independently-released connectors).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  activepieces:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: activepieces
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      # typecheck (sources + tests) + eslint + vitest (mocked, no credits) + build.
+      - run: npm run check
