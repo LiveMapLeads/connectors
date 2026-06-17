@@ -8,15 +8,16 @@ Each connector is a thin client of the public [Live Map Leads API](https://livem
 (`/api/v1`). The OpenAPI spec is the contract — every connector generates its typed client
 from it, so nothing here re-describes request or response shapes by hand.
 
-| Connector | Status | Location |
-|-----------|--------|----------|
-| **Activepieces** | Available (polling) | [`activepieces/`](activepieces) |
-| Zapier | Planned | `zapier/` |
-| n8n | Planned | `n8n/` |
+| Connector | Status | Location | Package |
+|-----------|--------|----------|---------|
+| **Activepieces** | Published (polling) | [`activepieces/`](activepieces) | [`@livemapleads/piece-live-map-leads`](https://www.npmjs.com/package/@livemapleads/piece-live-map-leads) |
+| Zapier | Planned | `zapier/` | — |
+| n8n | Planned | `n8n/` | — |
 
 Each platform's connector is its own independently-published npm package in its own top-level
 directory (`activepieces/`, `n8n/`, `zapier/`); a shared `connector-core/` is extracted once a
-second adapter proves what's genuinely shared.
+second adapter proves what's genuinely shared. Releases publish from GitHub Actions via npm
+**Trusted Publishing** (OIDC + provenance, no tokens) — see [PUBLISHING.md](PUBLISHING.md).
 
 This repository is **public and MIT-licensed on purpose**: a verified n8n community node
 requires a public repo + MIT + npm provenance (per-package, satisfiable from a subdirectory of
