@@ -33,6 +33,8 @@ jobs:
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
+          cache: 'npm'
+          cache-dependency-path: activepieces/package-lock.json
       # Trusted Publishing (OIDC) needs a recent npm (>= 11.5.1); Node 22 ships npm 10.x.
       - name: Use a Trusted-Publishing-capable npm
         run: npm install -g npm@latest
