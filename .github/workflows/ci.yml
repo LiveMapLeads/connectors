@@ -5,10 +5,20 @@ name: CI
 on:
   push:
     branches: [main]
+    paths:
+      - 'activepieces/**'
+      - '.github/workflows/ci.yml'
   pull_request:
+    paths:
+      - 'activepieces/**'
+      - '.github/workflows/ci.yml'
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   activepieces:
@@ -21,6 +31,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: 'npm'
+          cache-dependency-path: activepieces/package-lock.json
       - run: npm ci
       # typecheck (sources + tests) + eslint + vitest (mocked, no credits) + build.
       - run: npm run check
