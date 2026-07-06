@@ -1,0 +1,57 @@
+#!/usr/bin/env sh
+# version-controlled git hooks (.githooks) — managed by scripts/install-git-hooks.sh
+# pre-push — mirror CI's `activepieces` job locally so check failures never reach
+# GitHub Actions and burn minutes. Runs ONLY when the push touches activepieces/
+# (matches .github/workflows/ci.yml `paths:` filter).
+#
+# Mirrors: ci.yml `activepieces` job — `npm run check` in activepieces/
+# (= typecheck + eslint + vitest [mocked, no credits] + build).
+#
+# Source of truth: this file (version-controlled). Install into .git/hooks via
+#   scripts/install-git-hooks.sh
+# Bypass once (discouraged):  git push --no-verify
+set -u
+
+REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+PKG="$REPO_ROOT/activepieces"
+[ -d "$PKG" ] || exit 0
+
+# Decide whether the push touches activepieces/ (stdin: <lref> <lsha> <rref> <rsha> per ref).
+NEED=""
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  case "$local_sha" in *[!0]*) ;; *) continue ;; esac        # ref deletion → skip
+  case "$remote_sha" in
+    *[!0]*) base="$remote_sha" ;;                             # normal update
+    *) base=$(git merge-base "$local_sha" origin/main 2>/dev/null || echo "") ;;
+  esac
+  if [ -n "$base" ]; then
+    files=$(git diff --name-only "$base" "$local_sha" 2>/dev/null)
+  else
+    files="activepieces/__unknown_base__"                     # can't scope → run to be safe
+  fi
+  case "$files" in *activepieces/*) NEED=1 ;; esac
+done
+[ -n "$NEED" ] || exit 0
+
+cd "$PKG" || exit 1
+if ! command -v npm >/dev/null 2>&1; then
+  echo "pre-push: activepieces/ changed but npm not found — SKIPPING local check."
+  echo "          (CI will still run it; this only skips the local pre-check.)"
+  exit 0
+fi
+if [ ! -d node_modules ]; then
+  echo "pre-push: activepieces/ changed but node_modules is missing — SKIPPING local check."
+  echo "          Install deps so this gate can run: (cd activepieces && npm ci)"
+  echo "          (CI will still run npm run check; this only skips the local pre-check.)"
+  exit 0
+fi
+
+echo "pre-push: activepieces/ changed → running 'npm run check' locally (tsc + eslint + vitest + build)…"
+if npm run check; then
+  echo "✓ local CI checks passed."
+  exit 0
+fi
+echo ""
+echo "❌ npm run check failed — fix the above so GitHub Actions doesn't fail (and burn minutes)."
+echo "Override once (discouraged): git push --no-verify"
+exit 1
