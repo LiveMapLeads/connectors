@@ -55,6 +55,20 @@ To run it inside Activepieces locally, copy/symlink this package into your Activ
 (`npm start` in the Activepieces repo). See the Activepieces
 [piece development docs](https://www.activepieces.com/docs/build-pieces/building-pieces/start-building).
 
+### Activepieces SDK gotchas
+
+- **`PieceAuth.SecretText` values come in two shapes.** The run context types the value as
+  `{ type, secret_text }` (`SecretTextConnectionValue`), `validate` types it as a `string`, and
+  older runtimes delivered the bare string. Accept both and trim (see `resolveApiKey` in
+  [`src/lib/common/client.ts`](src/lib/common/client.ts)).
+- **`createTrigger` returns a union of every strategy's trigger type,** so calling
+  `.run`/`.test`/`.onEnable` on it directly resolves the params to `never`. Test a polling
+  trigger through `pollingHelper.poll/test/onEnable(polling, …)` instead. `createAction`
+  returns a single type, so `action.run(ctx)` is callable with a minimal `{ auth, propsValue }`.
+- **Build as CommonJS with `module: Node16`.** The Activepieces framework is CommonJS, and
+  Node16 resolution makes `import createClient from 'openapi-fetch'` read the package's
+  `exports` map and pick its `.cjs` build.
+
 ### Updating the client when the API changes
 
 The API contract is the OpenAPI spec. To pull in API changes:
