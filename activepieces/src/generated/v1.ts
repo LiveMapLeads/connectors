@@ -15,9 +15,13 @@ export interface paths {
          * List completed searches
          * @description List the calling account's completed searches, newest first, each with
          *     its result count and download links. Only the calling account's own
-         *     searches are ever returned — no cross-account identifiers are exposed.
+         *     searches are ever returned; no other account's identifiers are exposed.
          *     This is the polling source for a "New search completed" automation
          *     trigger.
+         *
+         *     A search that delivered results but could not cover all of the requested
+         *     area is listed too, with `status: "incomplete"`. It was charged only for
+         *     the records it delivered.
          *
          *     For incremental polling, pass `since` = the most recent `completedAt` you
          *     have already seen; the response returns only searches that finished
@@ -34,8 +38,74 @@ export interface paths {
          *     to finish via `GET /jobs?status=completed&since=…`.
          *
          *     Provide a location as **exactly one** of `locationQuery` (text) or
-         *     `customGeolocation` (a drawn area) — one is required, and supplying both
+         *     `customGeolocation` (a drawn area). One is required, and supplying both
          *     is rejected.
+         *
+         *     **Add-ons.** Switch on extra data with `addOns` (emails and social links
+         *     from each business's website, decision-maker leads, verified emails,
+         *     social profiles, reviews, photos, extra details) and tune it with the
+         *     options beside it. Each add-on costs credits on top of the business
+         *     record, charged only for what it delivers; `POST /jobs/estimate`
+         *     quotes a search with its add-ons before you start it. Add-ons that
+         *     collect personal contact data need `personalDataAttestation: true`;
+         *     without it the request is rejected with `400` and
+         *     `error: "invalid_request"`.
+         *
+         *     **Coverage.** Searches for businesses in the EU, the EEA (including
+         *     Norway, Iceland and Liechtenstein) or the United Kingdom are not supported
+         *     and are rejected with `400` and `error: "location_not_supported"`, and so,
+         *     because of local data protection laws, are searches for businesses in the
+         *     Democratic Republic of the Congo, Vietnam, Serbia, Albania, Monaco, Gibraltar,
+         *     the Isle of Man, the Faroe Islands, New Caledonia, French Polynesia, Wallis and
+         *     Futuna, Saint-Pierre-et-Miquelon, Saint-Barthélemy or the French Southern and
+         *     Antarctic Lands, and, because of international sanctions, searches for
+         *     businesses in Iran, North Korea, Crimea, or the Donetsk, Luhansk, Kherson and
+         *     Zaporizhzhia regions of Ukraine (those four regions in full). This is
+         *     decided by where the searched area or place is, never by where your account
+         *     is. A `customGeolocation` that reaches into one of those countries or
+         *     regions anywhere is rejected too, even if most of it lies outside; adjust the area and retry.
+         *     Searches for businesses in Cuba are accepted, but not with every option: a
+         *     search that reaches Cuba and uses an option not available there (some
+         *     add-ons and filters, or a `locationQuery` that resolves to a single point
+         *     rather than an area) is rejected with `400` and
+         *     `error: "location_not_supported"`, and its `message` says what to change.
+         *     A location that cannot be placed in any country is rejected with
+         *     `error: "location_not_resolved"`, and a temporary failure to check a text
+         *     location returns `503` with `error: "location_check_unavailable"` (safe to
+         *     retry). A search that reaches a country whose data protection law does
+         *     not allow named people (decision-maker leads, verified emails or
+         *     reviewer names) is rejected with `400` and
+         *     `error: "add_on_unavailable_in_area"` when it asks for one of them: turn
+         *     that add-on off and retry the same area. A rejected search starts
+         *     nothing and uses no credits.
+         *
+         *     **Searches running at once.** Up to three of your searches can run at
+         *     the same time, and at most one of them can collect emails or extra
+         *     details. A search beyond that is rejected with `409` and
+         *     `error: "too_many_running_searches"`. Nothing is started and no credits
+         *     are used; start it again once one of the running searches has finished.
+         *     Nothing is queued for you.
+         *
+         *     **Free credits.** A search without `capCredits` holds every credit you
+         *     have free while it runs. If your free credits cannot start a new search,
+         *     it is rejected with `402` and `error: "insufficient_credits"`, with
+         *     nothing started. Set `capCredits` on your searches to run them side by
+         *     side.
+         *
+         *     **Retrying safely.** Send an `Idempotency-Key` header (a new UUID per
+         *     search you mean to start) to make a retry safe. For 24 hours, a request
+         *     with the same key and the same body returns the first search's `jobId`
+         *     with `202` and the `Idempotent-Replayed: true` header, and starts
+         *     nothing. The same key with a different body is rejected with `422` and
+         *     `error: "idempotency_key_reused"`. A request that was rejected, for
+         *     example with `409` or `402`, does not use up its key.
+         *
+         *     **Terms of Service.** The account holder must have accepted the current
+         *     Terms of Service in the app. Until they do, a search is rejected with
+         *     `403` and `error: "terms_not_accepted"`, with nothing started. When we
+         *     change the Terms in a way that needs agreement, the holder is asked to
+         *     accept again the next time they open the app; an API key cannot accept
+         *     on their behalf.
          */
         post: operations["startSearch"];
         delete?: never;
@@ -44,26 +114,515 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/jobs/estimate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Estimate a search before starting it
+         * @description Quote a search without starting it. Send the same body you would send
+         *     to `POST /jobs`. The search goes through the same checks, so a body
+         *     `POST /jobs` would reject is rejected here with the same `error`, and a
+         *     text location is resolved the same way. Nothing is started, held or
+         *     charged.
+         *
+         *     The answer is a ceiling, not a price. `maxCreditsCharged` is the most
+         *     the search can charge, and `maxCreditsHeld` the most it holds while it
+         *     runs (your `capCredits`, or all your free credits without one). A
+         *     search is charged only for what it delivers, so it usually costs less.
+         *     Your free credits and running searches can change before you start it,
+         *     and `POST /jobs` decides again when you do.
+         *
+         *     Needs the `searches:write` permission, the same as starting a search.
+         */
+        post: operations["estimateSearch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List every search, in any state
+         * @description List the calling account's searches in every state (queued, running,
+         *     completed, incomplete, cancelled and failed), newest created first,
+         *     each as the same `Search` that `GET /jobs/{id}` returns. Only the
+         *     calling account's own searches are ever returned.
+         *
+         *     Pages are ordered by when each search was created, never by when it
+         *     finished, and are linked by `cursor`: pass the `nextCursor` of one page
+         *     to get the next, and stop when `nextCursor` is null. A search created
+         *     while you page through the list sorts first, so it never shifts the
+         *     later pages and no search appears twice or is skipped; read the first
+         *     page again to see new searches.
+         *
+         *     Use it to learn how searches ended when you did not keep their ids, or
+         *     to find failed and cancelled searches, which `GET /jobs?status=completed`
+         *     never lists. Filter with `status`, which may be repeated
+         *     (`?status=failed&status=cancelled`).
+         */
+        get: operations["listSearchHistory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get one search
+         * @description Read one of your searches in any state: what it asked for, how far it
+         *     has got while it runs, and how it ended once it has.
+         *
+         *     **Learning how a search ended.** For a search you started, poll this
+         *     until `status` is no longer `queued` or `running`. Every 30 seconds is
+         *     plenty: `progress.usualMinutes` says how long a search like it usually
+         *     takes. Then read `status`: `completed` and `incomplete` carry
+         *     `downloads`, `cancelled` says in `cancelRefundsInFull` and `recordCount`
+         *     what it kept, and `failed` carries `failure`. To find searches whose ids
+         *     you did not keep, page `GET /jobs/history`.
+         *
+         *     **A search that never starts.** A search normally leaves `queued`
+         *     within a few minutes. Rarely, its run never starts and it stays
+         *     `queued`: cancelling it answers `409` with `not_started`, and a retry
+         *     with the same `Idempotency-Key` returns this same search. A daily
+         *     check flags such searches for support to clear, which ends them as
+         *     `failed`. Until then it may still hold credits, so do not count on
+         *     them being free. Before you start the search again with a new
+         *     `Idempotency-Key`, read the original here, so you do not run the same
+         *     search twice.
+         *
+         *     Another account's search and an id that matches no search both answer
+         *     `404` with `error: "not_found"`; an id that is not a search id answers
+         *     `400`.
+         */
+        get: operations["getSearch"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Cancel a running search
+         * @description Ask one of your running searches to stop. A `202` means the request was
+         *     accepted, not that the search has stopped: the answer is the search as
+         *     it reads right after, usually still `running` with
+         *     `cancelRequested: true`, or already ended if it finished in that
+         *     moment. Read it with `GET /jobs/{id}` for the outcome.
+         *
+         *     **What a cancel costs.** It depends on the search, and
+         *     `cancelRefundsInFull` says which before you cancel. When it is `false`,
+         *     a cancelled search keeps what it already found: it delivers those
+         *     records and is charged for them as usual, and ends `cancelled` with its
+         *     `recordCount`, `creditsCharged` and `downloads`. When it is `true`, a
+         *     cancelled search delivers nothing and every credit it held is released.
+         *     A search that finishes before the cancel takes effect ends as usual
+         *     and is charged for what it delivers.
+         *
+         *     Cancelling a search that is already stopping answers `202` again and
+         *     changes nothing. A search that cannot be cancelled answers `409`:
+         *     `already_finished` (it has ended), `not_started` (it has not started
+         *     running yet; retry in a moment. A search that stays `queued` may
+         *     never start: see "A search that never starts" under `GET /jobs/{id}`),
+         *     or `too_late` (it had finished, or is
+         *     being charged and delivered, when the cancel arrived; it ends as
+         *     usual). Cancelling has its own limit too: 10 a minute per account,
+         *     across all of its keys.
+         *
+         *     Needs the `searches:write` permission.
+         */
+        post: operations["cancelSearch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/deliver": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a finished search's event again
+         * @description Send one of your finished searches' `extraction.completed` event again,
+         *     to the webhooks you name. Use it when a delivery failed (a failed
+         *     delivery is never retried on its own), or to send a search to a
+         *     webhook created after it finished. Nothing is searched again and no
+         *     credits are used.
+         *
+         *     The event is the one the search sent when it finished, with fresh
+         *     download links, `completedAt` set to this delivery, and
+         *     `redelivered: true`. Each delivery carries a new `webhook-id`, so a
+         *     receiver that de-duplicates on `webhook-id` treats it as a new event;
+         *     one that must act once per search de-duplicates on `jobId`.
+         *
+         *     Every named webhook must be one of yours (`400`,
+         *     `error: "unknown_webhook"`, otherwise, whatever state the search is
+         *     in). It is sent whatever its `deliveryMode`, `ask` included, but a
+         *     paused one (`enabled: false`) receives nothing
+         *     and is counted in neither `delivered` nor `failed`. A search that has
+         *     not ended answers `409` with `not_finished`; one that ended without
+         *     results to send (it failed, or was cancelled before it kept anything)
+         *     answers `409` with `nothing_to_deliver`; one whose results are past the
+         *     90 days they are kept answers `410` with `export_expired`. Another
+         *     account's search and an id that matches no search both answer `404`.
+         *
+         *     Needs the `searches:write` permission. Limited to 10 a minute per
+         *     account, across all of its keys.
+         */
+        post: operations["redeliverSearch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/jobs/{id}/records": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Preview a finished search's records
+         * @description The first records of one of your finished searches, as its JSON
+         *     download has them, in the same order. Use it to look at results from
+         *     a script or an agent without downloading the whole file. It is a
+         *     preview, not a reader: there is no next page. For every record, use
+         *     the search's `downloads`.
+         *
+         *     **Size bounds.** A preview reads at most 16 MiB of the stored results,
+         *     and returns at most 4 MiB of records (measured as stored). A record
+         *     larger than 512 KiB (a business with hundreds of long reviews) is
+         *     never cut: it is passed over and counted in `skipped`. When a bound
+         *     stops the read before `limit` records or the end of the results,
+         *     `truncated` is `true` and `records` holds the records read so far.
+         *
+         *     A search that has not ended answers `409` with `not_finished`; one
+         *     that ended without results (it failed, or was cancelled before it kept
+         *     anything) answers `409` with `nothing_to_deliver`; one whose results
+         *     are past the 90 days they are kept answers `410` with
+         *     `export_expired`. Another account's search and an id that matches no
+         *     search both answer `404` with `error: "not_found"`; an id that is not
+         *     a search id, or a bad `limit`, answers `400`.
+         *
+         *     Needs the `searches:read` permission.
+         */
+        get: operations["previewSearchRecords"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List your webhooks
+         * @description Every webhook on your account, newest first. Signing secrets are never
+         *     shown here: only their last four characters, to tell them apart.
+         *
+         *     Needs the `webhooks:read` permission.
+         */
+        get: operations["listWebhooks"];
+        put?: never;
+        /**
+         * Create a webhook
+         * @description Add a URL to send finished searches to. The answer carries the
+         *     webhook's signing secret, shown this once: store it to verify the
+         *     events (see the `searchCompleted` webhook). To replace it later, update
+         *     the webhook with `rotateSecret: true`.
+         *
+         *     The URL must be `https://` and reach a public address: a private,
+         *     local or loopback address is rejected with `400`, and so is a domain
+         *     that points to one or cannot be looked up. An account can have at most
+         *     20 webhooks (`409`, `error: "webhook_limit_reached"`).
+         *
+         *     Needs the `webhooks:write` permission.
+         */
+        post: operations["createWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/webhooks/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get one webhook
+         * @description One of your webhooks, without its signing secret. Another account's
+         *     webhook and an id that matches none both answer `404`.
+         *
+         *     Needs the `webhooks:read` permission.
+         */
+        get: operations["getWebhook"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete a webhook
+         * @description Delete one of your webhooks. It receives nothing more, including for
+         *     searches already running that named it in `deliverTo`.
+         *
+         *     Needs the `webhooks:write` permission.
+         */
+        delete: operations["deleteWebhook"];
+        options?: never;
+        head?: never;
+        /**
+         * Change a webhook
+         * @description Change any of a webhook's fields; leave out the ones to keep. A new
+         *     `url` is checked exactly as on create, and nothing is changed when it
+         *     is rejected. `rotateSecret: true` replaces the signing secret: the
+         *     answer carries the new one, shown this once, and the old one stops
+         *     signing at once. Set `enabled: false` to pause the webhook without
+         *     deleting it.
+         *
+         *     Needs the `webhooks:write` permission.
+         */
+        patch: operations["updateWebhook"];
+        trace?: never;
+    };
+    "/webhooks/{id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Send a test event
+         * @description Send one signed `webhook.test` event (see the `webhookTest` webhook) to
+         *     a webhook, paused or not, and report what its endpoint answered. Use it
+         *     to check your endpoint and its signature check before a real search
+         *     finishes. The URL is checked again before anything is sent.
+         *
+         *     Needs the `webhooks:write` permission.
+         */
+        post: operations["testWebhook"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/account": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get your account
+         * @description Read your credits, how many of your searches are running, and the
+         *     name and permission of the key you are calling with. Nothing is
+         *     changed.
+         *
+         *     `credits.free` is what a new search can use now: your balance less
+         *     what your running searches hold. Up to three searches run at once,
+         *     and only one of them may collect emails or extra details: a start
+         *     that would break either rule is refused with `409`, so check
+         *     `runningSearches` first. The figures are read moments apart, so a
+         *     search that starts or ends meanwhile can show in one and not yet the
+         *     other; `POST /jobs` checks again when you start.
+         *
+         *     Needs the `searches:read` permission, which every full and read-only
+         *     key has.
+         */
+        get: operations["getAccount"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/categories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List business categories
+         * @description The business categories a search can be narrowed to with
+         *     `categories` on `POST /jobs`. Every name returned here is one
+         *     `POST /jobs` accepts, written exactly as it must be sent.
+         *
+         *     Without `q`, the whole list comes back in one response (a few
+         *     thousand short names), in no particular order; there are no pages.
+         *     With `q`, only the categories whose name has a word starting with
+         *     each word of `q` come back ("dent" finds "dentist" and "dental
+         *     clinic"; "car rep" finds "car repair and maintenance service"),
+         *     an exact name first. Matching ignores case and accents. A `q` with
+         *     no letters or digits is the same as leaving it out. `limit` caps
+         *     how many names come back; `total` still counts every match.
+         *
+         *     The list is the same for every account and changes rarely. Each
+         *     answer carries an `ETag` for that answer: it changes when the list
+         *     does, and differs between values of `q` and `limit`. The answer may
+         *     be stored by any cache, but every reuse must be checked here first
+         *     (`Cache-Control: public, no-cache`): repeat the same request with
+         *     its `ETag` in `If-None-Match` and, while the answer has not
+         *     changed, you get `304` with no body. A `304` needs a valid key and
+         *     counts against the rate limit like any other request.
+         *
+         *     Needs the `searches:read` permission, which every full and read-only
+         *     key has.
+         */
+        get: operations["listCategories"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
-export type webhooks = Record<string, never>;
+export interface webhooks {
+    searchCompleted: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A search finished and delivered its results
+         * @description Sent as a `POST` with a JSON body to each of your enabled webhooks whose
+         *     `deliveryMode` is `always`, and to each one a start named in
+         *     `deliverTo`, when a search finishes and delivers its results: it
+         *     completed, delivered part of an area (`incomplete`), or was cancelled
+         *     after it had found results it kept (`aborted`). A search that fails, or
+         *     is cancelled before it keeps anything, sends no event: poll
+         *     `GET /jobs/{id}` for a search you started.
+         *
+         *     **Verifying it.** Every event is signed the Standard Webhooks way, so
+         *     any Standard Webhooks library can check it with your secret. By hand:
+         *     your secret starts with `whsec` and an underscore; base64-decode the
+         *     rest to get the key. Compute the HMAC-SHA256, with that key, of
+         *     `{webhook-id}.{webhook-timestamp}.{body}`, where the body is the raw
+         *     request body exactly as received, and base64-encode it. It must equal
+         *     the part of `webhook-signature` after `v1,`. Compare in constant time,
+         *     and refuse an event whose `webhook-timestamp` is more than a few
+         *     minutes from your clock.
+         *
+         *     **Answering it.** Answer with any `2xx` status within 10 seconds. A
+         *     redirect, any other status or no answer in time is a failed delivery,
+         *     shown on the webhook (`lastDeliveryStatus`, `failureCount`). A failed
+         *     delivery is not retried: send it again with `POST /jobs/{id}/deliver`,
+         *     or read the search with `GET /jobs/{id}`.
+         *
+         *     **Duplicates.** `webhook-id` stays the same if one automatic delivery
+         *     reaches you twice, so de-duplicate on it. An event sent again with
+         *     `POST /jobs/{id}/deliver` carries a new `webhook-id` and
+         *     `redelivered: true`, so a receiver that must act once per search
+         *     de-duplicates on `jobId`.
+         *
+         *     **Download links** in the event work for 7 days after it is sent, and
+         *     need no API key. For fresh links, read the search with
+         *     `GET /jobs/{id}` while its results are kept (90 days).
+         */
+        post: operations["searchCompletedEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    webhookTest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * A test event
+         * @description Sent once each time you call `POST /webhooks/{id}/test`, signed like
+         *     `searchCompleted` with the same secret. It carries no search: use it to
+         *     check your endpoint, its signature check, and the body's shape.
+         */
+        post: operations["webhookTestEvent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+}
 export interface components {
     schemas: {
         /**
-         * @description Search definition. `additionalProperties: false` is a HARD part of the
-         *     contract: the v1 route MUST validate against this restricted field set and
-         *     reject any other field — it must NOT forward the raw body to the full
-         *     internal search schema. That internal schema also accepts add-on /
-         *     enrichment toggles (reviews, images, extra details — each billable),
-         *     premium / personal-data add-ons, and webhook routing (`deliverTo`); all of
-         *     those are DEFERRED from v1 (Phase 24.5) and MUST stay unreachable through
-         *     this endpoint (no billable add-on or personal-data path via v1). The field
-         *     names that DO appear here match the internal schema so the validated subset
-         *     maps onto the existing job-start path with no new credit logic. Exactly one
-         *     of `locationQuery` or `customGeolocation` is required.
+         * @description Search definition, for `POST /jobs` and `POST /jobs/estimate`. Any field
+         *     not listed here is rejected with `400`. Exactly one of `locationQuery` or
+         *     `customGeolocation` is required. Every add-on is off unless you switch it
+         *     on in `addOns`; an option left out takes its default, and an option for
+         *     an add-on that is off changes nothing.
          */
         StartSearchRequest: {
             /**
-             * @description One or more search terms, e.g. "dentist" or "italian restaurant". Each term runs against the location.
+             * @description One or more search terms, e.g. "dentist" or "italian restaurant". Each term runs against the location. A term is at most 100 characters after trimming, counted in UTF-16 code units (a character outside the Basic Multilingual Plane, such as an emoji, counts as two); a longer term is a 400.
              * @example [
              *       "dentist"
              *     ]
@@ -94,7 +653,7 @@ export interface components {
              * @enum {string}
              */
             website?: "any" | "with" | "without";
-            /** @description Restrict results to these business categories, e.g. "dentist" or "art gallery". Values are lowercase and must each be a recognised category — an unknown value is rejected with 400. The recognised set is large (thousands of entries) and is versioned with the data provider, so it is not enumerated inline here; a future GET /api/v1/categories endpoint will expose the current list for connector dropdowns. Omit this field to apply no category filter. */
+            /** @description Restrict results to these business categories, e.g. "dentist" or "art gallery". Values are lowercase and must each be a recognised category; an unknown value is rejected with 400. The recognised set is large (thousands of entries) and changes from time to time, so it is not enumerated inline here: `GET /categories` lists it, and can search it by word. Omit this field to apply no category filter. */
             categories?: string[];
             /**
              * @description Exclude permanently or temporarily closed places.
@@ -103,6 +662,103 @@ export interface components {
             skipClosed?: boolean;
             /** @description Optional per-search spending ceiling, in credits. The search stops before exceeding it. Recommended for unattended automations. */
             capCredits?: number;
+            addOns?: components["schemas"]["AddOns"];
+            /**
+             * @description With `addOns.websiteContacts`: the most website email addresses delivered, and charged, for each business.
+             * @default 3
+             */
+            maxEmailsPerBusiness?: number;
+            /**
+             * @description With `addOns.decisionMakerLeads`: how many decision-maker leads to find at each business. Each lead found is charged, so a higher number can cost much more; set `capCredits` too.
+             * @default 1
+             */
+            maxLeadsPerBusiness?: number;
+            /**
+             * @description Also list businesses located inside malls and shopping centers. Each one found inside is a business record, charged like any other, so a search can return more businesses than the places it searched; `capCredits` still caps the total.
+             * @default false
+             */
+            searchInsideVenues?: boolean;
+            /**
+             * @description With `addOns.reviews`: the most reviews collected for each business. It sets the review charge for each business that has reviews (a higher number costs more), whatever the number that comes back.
+             * @default 10
+             */
+            reviewsPerBusiness?: number;
+            /**
+             * @description With `addOns.reviews`, which reviews come first.
+             * @default newest
+             * @enum {string}
+             */
+            reviewsSort?: "newest" | "relevant" | "highest" | "lowest";
+            /**
+             * @description With `addOns.reviews`: reviews from all sources, or from Google only.
+             * @default all
+             * @enum {string}
+             */
+            reviewsSource?: "all" | "google";
+            /** @description With `addOns.reviews`: only reviews since a date (`2026-01-01`) or for a recent period (`3 months`). Leave it out for reviews of any age. */
+            reviewsSince?: string;
+            /** @description With `addOns.reviews`: only keep reviews that mention every keyword listed, one keyword per line. Leave it out for all reviews. */
+            reviewsKeyword?: string;
+            /**
+             * @description With `addOns.reviews`: include who wrote each review. Collects personal data, so it needs `personalDataAttestation: true`. Not available for a search that reaches a country whose data protection law does not allow it (`add_on_unavailable_in_area`).
+             * @default false
+             */
+            reviewerNames?: boolean;
+            /**
+             * @description With `addOns.photos`: the most photos collected for each business. It sets the photo charge for each business that has photos (a higher number costs more), whatever the number that comes back.
+             * @default 5
+             */
+            photosPerBusiness?: number;
+            /**
+             * @description List a contact found at several listings of the same business once in your download. Changes the download only, never the charge.
+             * @default true
+             */
+            mergeDuplicateContacts?: boolean;
+            /**
+             * @description Set to `true` to confirm: "I confirm I have a lawful basis to collect and use personal contact data, and will comply with applicable privacy and anti-spam law." Required whenever `addOns.websiteContacts`, `addOns.decisionMakerLeads`, `addOns.socialProfiles` or `reviewerNames` is on; without it the request is rejected with `400` and `error: "invalid_request"`. It is recorded with each search that collects personal data, together with the version of this wording, just as when you tick the same box on the search form.
+             * @default false
+             */
+            personalDataAttestation?: boolean;
+            /** @description Webhook ids (from `GET /webhooks`) to send this search's `extraction.completed` event to when it finishes, in addition to every enabled webhook whose `deliveryMode` is `always`, which receive it anyway. Use it for a webhook created with `deliveryMode: "ask"`, which fires only for the searches that name it. Every id must be one of your webhooks: an id that is not, whether another account's or one that matches nothing, is rejected with `400` and `error: "unknown_webhook"`, and nothing is started. A paused webhook (`enabled: false`) is accepted and receives nothing while it is paused. An id named twice counts once. */
+            deliverTo?: string[];
+        };
+        /** @description Extra data for each business, each off unless set to `true`. Each add-on costs credits on top of the business record, charged only for what it delivers; `POST /jobs/estimate` quotes a search with its add-ons. */
+        AddOns: {
+            /**
+             * @description Emails and social media links found on each business's website. Charged for each email address delivered, up to `maxEmailsPerBusiness` per business, except where decision-maker leads already found an email for that business; a business with no email found costs nothing extra. Collects personal data, so it needs `personalDataAttestation: true`.
+             * @default false
+             */
+            websiteContacts?: boolean;
+            /**
+             * @description Named decision makers at each business, with their contact details where found, up to `maxLeadsPerBusiness` per business. Charged for each lead found. On such a search a business returned with no email costs less than one with an email, and one with neither email nor phone costs nothing. Collects personal data, so it needs `personalDataAttestation: true`. Not available for a search that reaches a country whose data protection law does not allow it (`add_on_unavailable_in_area`).
+             * @default false
+             */
+            decisionMakerLeads?: boolean;
+            /**
+             * @description Checks each decision-maker lead's email and says whether it can receive mail. Off unless you ask for it, and only with `decisionMakerLeads`. Charged for each lead checked.
+             * @default false
+             */
+            verifiedEmails?: boolean;
+            /**
+             * @description Details from the social media profiles linked on each business's website. Needs `websiteContacts`. Charged for each profile delivered. Collects personal data, so it needs `personalDataAttestation: true`.
+             * @default false
+             */
+            socialProfiles?: boolean;
+            /**
+             * @description Reviews of each business, in a separate download, shaped by `reviewsPerBusiness` and the other review options. Charged for each business that has reviews, at a price set by `reviewsPerBusiness`.
+             * @default false
+             */
+            reviews?: boolean;
+            /**
+             * @description Photos of each business, up to `photosPerBusiness`. Charged for each business that has photos, at a price set by `photosPerBusiness`.
+             * @default false
+             */
+            photos?: boolean;
+            /**
+             * @description More from each business's listing: web results, reservation and online-ordering links, and questions and answers. Charged for each business.
+             * @default false
+             */
+            extraDetails?: boolean;
         };
         /** @description A drawn search area as GeoJSON. Coordinates are [longitude, latitude] pairs. Mutually exclusive with `locationQuery`. */
         GeoArea: {
@@ -130,10 +786,50 @@ export interface components {
              */
             status: "queued";
         };
+        /**
+         * @description What a search can hold and charge at most, from your credits right now. Every figure is a ceiling, never a promised price: a search is charged only for what it delivers. Credits are the same credits `capCredits` and `creditsCharged` count.
+         * @example {
+         *       "status": "ready",
+         *       "coveredByFreeCredits": true,
+         *       "freeCredits": 1200,
+         *       "maxCreditsHeld": 500,
+         *       "maxCreditsCharged": 500,
+         *       "maxBusinesses": 500,
+         *       "maxCreditsPerBusiness": 1,
+         *       "creditsNeeded": null,
+         *       "limitedBy": "credits"
+         *     }
+         */
+        SearchEstimate: {
+            /**
+             * @description `ready`: the search can start. `short`: the credits it may hold (`capCredits`, or your free credits) cannot cover one business per search term, so it would not start; raise `capCredits`, buy credits, or ask for fewer add-ons. `balance_unavailable`: your balance could not be read just now; every figure is null, and `POST /jobs` still checks your credits when you start.
+             * @enum {string}
+             */
+            status: "ready" | "short" | "balance_unavailable";
+            /** @description Whether the credits this search may hold cover the least it needs to start. Null when your balance could not be read. */
+            coveredByFreeCredits: boolean | null;
+            /** @description Your free credits, your balance less what your running searches hold. */
+            freeCredits: number | null;
+            /** @description The most this search would hold while it runs: `capCredits`, or all your free credits without one. */
+            maxCreditsHeld: number | null;
+            /** @description The most this search can charge (null unless `ready`). It is charged only for what it delivers, so usually less. */
+            maxCreditsCharged: number | null;
+            /** @description The most businesses this search can return (null unless `ready`). */
+            maxBusinesses: number | null;
+            /** @description The most one business can cost with the add-ons and options asked for (null unless `ready`). May be a half credit. */
+            maxCreditsPerBusiness: number | null;
+            /** @description On `short`: the least the search must be able to hold to start. Null otherwise. */
+            creditsNeeded: number | null;
+            /**
+             * @description Which limit sets `maxBusinesses` (null unless `ready`): `credits` (what the search may hold), `max_results` (your `maxResults`), `per_search_limit` (the most one search can return), or `area` (the most the search area can return).
+             * @enum {string|null}
+             */
+            limitedBy: "credits" | "max_results" | "per_search_limit" | "area" | null;
+        };
         SearchList: {
             /** @description Completed searches, newest first. */
             data: components["schemas"]["SearchSummary"][];
-            /** @description True when more completed searches matched than fit in `limit` — the page was truncated to the newest `limit`. Rare for a single account. To retrieve the remainder, repeat the call with a larger `limit` (max 100) and the SAME `since`; only advance `since` to the newest `completedAt` you have seen once `hasMore` is false. Advancing `since` while `hasMore` is true would skip the older, un-returned searches. Results are de-duplicated by `jobId` regardless. */
+            /** @description True when more completed searches matched than fit in `limit`: the page was truncated to the newest `limit`. Rare for a single account. To retrieve the remainder, repeat the call with a larger `limit` (max 100) and the SAME `since`; only advance `since` to the newest `completedAt` you have seen once `hasMore` is false. Advancing `since` while `hasMore` is true would skip the older, un-returned searches. Results are de-duplicated by `jobId` regardless. */
             hasMore: boolean;
         };
         /**
@@ -155,17 +851,17 @@ export interface components {
         SearchSummary: {
             /**
              * Format: uuid
-             * @description Stable identifier — use it as the de-duplication key when polling.
+             * @description Stable identifier. Use it as the de-duplication key when polling.
              */
             jobId: string;
             /**
-             * @description Always `completed` for this endpoint (it lists completed searches); maps from the internal `complete` state. The full public lifecycle (`queued`/`running`/`completed`/`cancelled`/`failed`, mapping from the internal `queued`/`running`/`complete`/`aborted`/`failed`+`timed_out`) arrives with the single-search detail route in a later phase (24.5).
+             * @description `completed` for a search that covered the whole requested area (maps from the internal `complete` state). `incomplete` for a search that delivered results but could not cover part of the requested area; it was charged only for the records it delivered, and `recordCount` is what it delivered (maps from the internal `incomplete` state). Both are listed under the `completed` filter. Every other state (`queued`, `running`, `cancelled`, `failed`) is read with `GET /jobs/{id}` or `GET /jobs/history`.
              * @enum {string}
              */
-            status: "completed";
+            status: "completed" | "incomplete";
             /** @description Number of business records the search returned. */
             recordCount: number;
-            /** @description Credits charged for this search (charge-on-success). */
+            /** @description Credits charged for this search (charge-on-success), a whole number: a business record costs 1 credit plus any add-ons, and the total is rounded down to a whole credit (at least 1 credit when the exact total is above 0), so this need not equal `recordCount`. */
             creditsCharged: number;
             /**
              * Format: date-time
@@ -175,19 +871,458 @@ export interface components {
             /** @description Ready-to-use download links, one per format. Each is a signed, time-limited URL (about 7 days) that needs no API key. Null if download links are unavailable for this search. */
             downloads: components["schemas"]["Downloads"] | null;
             /**
-             * @description Short human-readable summary of the result.
+             * @description Short human-readable summary of the result. For an `incomplete` search it adds the sentence that says why part of the area is missing.
              * @example Your search finished with 142 records.
              */
             summary?: string;
         };
-        /** @description Signed, time-limited download URLs by format. No API key needed to fetch. */
+        /**
+         * @description Where a search is. `queued`: accepted, not running yet. `running`: running, or being charged and delivered, or stopping after a cancel (`cancelRequested: true`). `completed`: it finished and delivered. `incomplete`: it delivered what it found but could not search part of the area; it was charged only for what it delivered. `cancelled`: it was stopped by a cancel. `failed`: it could not be completed; see `failure`. The last four are final.
+         * @enum {string}
+         */
+        SearchStatus: "queued" | "running" | "completed" | "incomplete" | "cancelled" | "failed";
+        /**
+         * @description One search, in any state. Fields that describe how it ended are null while it runs, and `progress` is null once it has ended.
+         * @example {
+         *       "jobId": "8f1d6c2a-3b4e-4f7a-9c1d-2e3f4a5b6c7d",
+         *       "status": "completed",
+         *       "cancelRequested": false,
+         *       "createdAt": "2026-06-12T14:02:11Z",
+         *       "settledAt": "2026-06-12T14:22:05Z",
+         *       "request": {
+         *         "searchTerms": [
+         *           "dentist"
+         *         ],
+         *         "location": "Austin, TX",
+         *         "addOns": {
+         *           "websiteContacts": true,
+         *           "decisionMakerLeads": false,
+         *           "verifiedEmails": false,
+         *           "socialProfiles": false,
+         *           "reviews": false,
+         *           "photos": false,
+         *           "extraDetails": false
+         *         }
+         *       },
+         *       "recordCount": 142,
+         *       "creditsCharged": 160,
+         *       "progress": null,
+         *       "finishReason": "area_exhausted",
+         *       "shortfall": null,
+         *       "failure": null,
+         *       "cancelRefundsInFull": false,
+         *       "downloads": {
+         *         "csv": "https://livemapleads.com/api/exports/download?token=eyJhbGciOi...",
+         *         "xlsx": "https://livemapleads.com/api/exports/download?token=eyJhbGciOi...",
+         *         "json": "https://livemapleads.com/api/exports/download?token=eyJhbGciOi..."
+         *       }
+         *     }
+         */
+        Search: {
+            /**
+             * Format: uuid
+             * @description The search's id, the `jobId` its start returned.
+             */
+            jobId: string;
+            status: components["schemas"]["SearchStatus"];
+            /** @description True while a cancel you asked for is stopping the search (`status` is still `running`). False otherwise, including once it has ended. */
+            cancelRequested: boolean;
+            /**
+             * Format: date-time
+             * @description When the search was created (RFC 3339). Not when it finished: no finish time is reported for a search that failed or was cancelled.
+             */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description When the search was charged for what it delivered (RFC 3339), or null if it never was: while it runs, and for a search that failed or was cancelled with a full refund.
+             */
+            settledAt: string | null;
+            /** @description What the search asked for, or null when it can no longer be read. */
+            request: components["schemas"]["SearchRequestEcho"] | null;
+            /** @description Business records the search delivered. Null until it has ended, and may be null or 0 for a search that failed, or that was cancelled with nothing delivered. */
+            recordCount: number | null;
+            /** @description Credits charged for the search, a whole number (the same credits `capCredits` counts). Null until it is charged. */
+            creditsCharged: number | null;
+            /** @description While the search is `queued` or `running`, how far it has got; null once it has ended. */
+            progress: components["schemas"]["SearchProgress"] | null;
+            /**
+             * @description Why a search that delivered ended: `target_reached` (it found as many businesses as `maxResults` asked for), `budget_reached` (it stopped at the credits it could hold, `capCredits` or your free credits), `limit_reached` (it reached the most one search can return), `area_exhausted` (it found every business it could in the area), `area_partial` (part of the area could not be searched; `shortfall` says so), `stopped` (it was cancelled). Null while it runs, for a failed search, and when it is not known.
+             * @enum {string|null}
+             */
+            finishReason: "target_reached" | "budget_reached" | "limit_reached" | "area_exhausted" | "area_partial" | "stopped" | null;
+            /**
+             * @description When the search delivered less than it asked for, or left businesses out, the sentences that say why, as one paragraph (the same words the app shows). Null when there is nothing to say.
+             * @example We delivered 140 of the 200 businesses you asked for. Because of a problem on our side, we couldn't search part of the area you picked, so some businesses there may be missing from your list.
+             */
+            shortfall: string | null;
+            /** @description Why a `failed` search failed; null for every other status. */
+            failure: components["schemas"]["SearchFailure"] | null;
+            /** @description What a cancel does to this search. `false`: a cancelled search keeps what it already found, delivers it and is charged for it. `true`: a cancelled search delivers nothing and is refunded in full. */
+            cancelRefundsInFull: boolean;
+            /** @description Download links for a search that ended and delivered results (`completed`, `incomplete`, or `cancelled` with what it kept), while its files are kept; null otherwise. The same signed, time-limited links as on `GET /jobs`. */
+            downloads: components["schemas"]["Downloads"] | null;
+        };
+        /** @description What a search asked for. */
+        SearchRequestEcho: {
+            /** @description The search terms, as sent. */
+            searchTerms: string[];
+            /** @description The place searched: the `locationQuery` as sent, the name of the place a drawn area was made from, or "Custom map area" for a drawn area. */
+            location: string;
+            addOns: components["schemas"]["AddOnsEcho"];
+        };
+        /** @description Which add-ons the search asked for, by the names `addOns` takes on a start. */
+        AddOnsEcho: {
+            websiteContacts: boolean;
+            decisionMakerLeads: boolean;
+            verifiedEmails: boolean;
+            socialProfiles: boolean;
+            reviews: boolean;
+            photos: boolean;
+            extraDetails: boolean;
+        };
+        /** @description How far a search that is still `queued` or `running` has got. A time and a ceiling, never a count of what it has found so far. */
+        SearchProgress: {
+            /** @description Whole seconds since the search was created, by our clock. */
+            elapsedSeconds: number;
+            /** @description The most businesses the search aims for, or null until it has been planned. */
+            expectedBusinesses: number | null;
+            /** @description How long a search like this usually takes, as a range of whole minutes, or null when there is no estimate for it. */
+            usualMinutes: {
+                low: number;
+                high: number;
+            } | null;
+        };
+        /** @description Why a search failed. Branch on `code`; `message` is for people. */
+        SearchFailure: {
+            /**
+             * @description `search_failed`: the search could not be completed. `search_timed_out`: it ran longer than a search may run and was stopped. Either way it delivered nothing and was not charged; you can start it again.
+             * @enum {string}
+             */
+            code: "search_failed" | "search_timed_out";
+            /** @example The search could not be completed, so it delivered nothing and you were not charged for it. Start it again, or contact support if it keeps failing. */
+            message: string;
+        };
+        SearchHistory: {
+            /** @description Searches, newest created first. */
+            data: components["schemas"]["Search"][];
+            /**
+             * @description Pass it as `cursor` to get the next page; null when this page is the last.
+             * @example MjAyNi0wNi0xMlQxNDowMjoxMVo
+             */
+            nextCursor: string | null;
+        };
+        /** @description Signed, time-limited download URLs by format. No API key needed to fetch. `csv`/`xlsx`/`json` are the main business list. `reviews-csv`/`reviews-xlsx` are present ONLY when the search ran the Reviews add-on AND reviews were returned: a separate file, one row per review joined to its business. */
         Downloads: {
             /** Format: uri */
             csv?: string;
-            /** Format: uri */
+            /**
+             * Format: uri
+             * @description Business list (Excel). Usually one workbook. A large search that is collected in batches and delivers more than 25,000 records downloads a `.zip` archive instead (`application/zip`), holding several Excel workbooks of up to 25,000 rows each, in delivery order. The `csv` and `json` downloads are always a single file.
+             */
             xlsx?: string;
             /** Format: uri */
             json?: string;
+            /**
+             * Format: uri
+             * @description Reviews list (CSV). Present only for a Reviews-add-on search that returned reviews.
+             */
+            "reviews-csv"?: string;
+            /**
+             * Format: uri
+             * @description Reviews list (Excel). Present only for a Reviews-add-on search that returned reviews.
+             */
+            "reviews-xlsx"?: string;
+        };
+        /**
+         * @description One of your webhooks. The signing secret is never part of it: it is shown once, when the webhook is created and each time it is rotated.
+         * @example {
+         *       "id": "3c9e2f4a-7b1d-4e8a-a6c5-1d2e3f4a5b6c",
+         *       "label": "CRM import",
+         *       "url": "https://hooks.example.com/live-map-leads",
+         *       "enabled": true,
+         *       "deliveryMode": "always",
+         *       "createdAt": "2026-06-10T09:15:00Z",
+         *       "lastDeliveryAt": "2026-06-12T14:22:07Z",
+         *       "lastDeliveryStatus": "200",
+         *       "failureCount": 0,
+         *       "secretLast4": "k9Qz"
+         *     }
+         */
+        Webhook: {
+            /** Format: uuid */
+            id: string;
+            /** @description Your name for it, or null. */
+            label: string | null;
+            /**
+             * Format: uri
+             * @description Where events are sent.
+             */
+            url: string;
+            /** @description False while paused. A paused webhook receives no events. */
+            enabled: boolean;
+            deliveryMode: components["schemas"]["DeliveryMode"];
+            /** Format: date-time */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description When the last event or test was sent to it, or null if none has been.
+             */
+            lastDeliveryAt: string | null;
+            /** @description What the last delivery or test got: the HTTP status your endpoint answered with (`"200"`), or a short reason it could not be reached (`"error: blocked url"`, `"error: dns lookup failed"`, or `"error: "` and the error's name, such as `"error: TimeoutError"`). Null if nothing has been sent. */
+            lastDeliveryStatus: string | null;
+            /** @description Failed deliveries in a row; back to 0 after one that succeeds. Tests do not count. */
+            failureCount: number;
+            /** @description The last four characters of the signing secret, to tell secrets apart. */
+            secretLast4: string;
+        };
+        /**
+         * @description `always`: receives the event of every search that finishes and delivers results. `ask`: receives it only for searches that name the webhook in `deliverTo` (and when you send one again with `POST /jobs/{id}/deliver`).
+         * @enum {string}
+         */
+        DeliveryMode: "always" | "ask";
+        WebhookList: {
+            /** @description Your webhooks, newest first. */
+            data: components["schemas"]["Webhook"][];
+        };
+        CreateWebhookRequest: {
+            /**
+             * @description Where to send events: an `https://` URL that reaches a public address.
+             * @example https://hooks.example.com/live-map-leads
+             */
+            url: string;
+            /** @description A name to tell it apart. */
+            label?: string;
+            /** @default always */
+            deliveryMode?: components["schemas"]["DeliveryMode"];
+        };
+        /**
+         * @description Only the fields sent are changed; send at least one.
+         * @example {
+         *       "label": "CRM import"
+         *     }
+         */
+        UpdateWebhookRequest: {
+            /** @description A new destination, checked as on create. */
+            url?: string;
+            /** @description A new name, or null to remove it. */
+            label?: string | null;
+            /** @description False pauses the webhook; true turns it back on. */
+            enabled?: boolean;
+            deliveryMode?: components["schemas"]["DeliveryMode"];
+            /**
+             * @description Replace the signing secret. The answer carries the new one, shown this once; events are signed with it from now on.
+             * @enum {boolean}
+             */
+            rotateSecret?: true;
+        };
+        WebhookCreated: {
+            webhook: components["schemas"]["Webhook"];
+            /**
+             * @description The signing secret, shown only in this answer. Keep it to verify events.
+             * @example YOUR_SIGNING_SECRET
+             */
+            secret: string;
+        };
+        WebhookUpdated: {
+            webhook: components["schemas"]["Webhook"];
+            /**
+             * @description The new signing secret, present only when this request set `rotateSecret: true`, and shown only here.
+             * @example YOUR_NEW_SIGNING_SECRET
+             */
+            secret?: string;
+        };
+        /**
+         * @example {
+         *       "delivered": true,
+         *       "status": "200"
+         *     }
+         */
+        WebhookTestResult: {
+            /** @description True when your endpoint answered with a 2xx status. */
+            delivered: boolean;
+            /** @description The HTTP status your endpoint answered with (`"200"`), or a short reason it could not be reached (`"error: blocked url"`, `"error: dns lookup failed"`, `"error: TimeoutError"`). */
+            status: string;
+        };
+        RedeliverSearchRequest: {
+            /** @description The webhooks to send the event to, each one of yours. An id named twice counts once. */
+            webhookIds: string[];
+        };
+        /**
+         * @example {
+         *       "records": [
+         *         {
+         *           "name": "Lakeway Family Dentistry",
+         *           "address": "1700 Ranch Rd 620 S, Lakeway, TX 78734",
+         *           "phone": "+1 512-555-0142",
+         *           "website": "https://lakewayfamilydentistry.example",
+         *           "rating": 4.8,
+         *           "reviewsCount": 312,
+         *           "category": "Dentist",
+         *           "googleMapsUrl": "https://www.google.com/maps/place/?q=place_id:ChIJexample",
+         *           "latitude": 30.3427,
+         *           "longitude": -97.9686
+         *         }
+         *       ],
+         *       "skipped": 0,
+         *       "truncated": false
+         *     }
+         */
+        RecordPreview: {
+            /** @description The first records of the search, in its JSON download's order, each exactly as the download has it (the same fields as a record of the JSON file: which ones a record carries depends on the add-ons the search ran with). */
+            records: {
+                [key: string]: unknown;
+            }[];
+            /** @description Records passed over because each is larger than 512 KiB. They are in the download. */
+            skipped: number;
+            /** @description True when a size bound stopped the read before `limit` records or the end of the results; `records` holds those read before it. */
+            truncated: boolean;
+        };
+        /**
+         * @example {
+         *       "delivered": 1,
+         *       "failed": 0,
+         *       "requested": 1
+         *     }
+         */
+        Redelivery: {
+            /** @description Webhooks whose endpoint accepted the event (a 2xx answer). */
+            delivered: number;
+            /** @description Webhooks whose endpoint did not accept it, or could not be reached. */
+            failed: number;
+            /** @description Webhooks named. Those in neither `delivered` nor `failed` were paused and sent nothing. */
+            requested: number;
+        };
+        /**
+         * @description The body of the `extraction.completed` event. Branch on `event`; new fields may be added.
+         * @example {
+         *       "event": "extraction.completed",
+         *       "jobId": "8f1d6c2a-3b4e-4f7a-9c1d-2e3f4a5b6c7d",
+         *       "recordCount": 120,
+         *       "creditsCharged": 120,
+         *       "completedAt": "2026-11-14T15:04:05.000Z",
+         *       "status": "complete",
+         *       "downloads": {
+         *         "csv": "https://livemapleads.com/api/exports/download?token=eyJhbGciOi...",
+         *         "xlsx": "https://livemapleads.com/api/exports/download?token=eyJhbGciOi...",
+         *         "json": "https://livemapleads.com/api/exports/download?token=eyJhbGciOi..."
+         *       },
+         *       "summary": "Your extraction is complete. 120 records are ready to download."
+         *     }
+         */
+        SearchCompletedEvent: {
+            /** @enum {string} */
+            event: "extraction.completed";
+            /**
+             * Format: uuid
+             * @description The search's id, as its start returned it. De-duplicate on it to act once per search.
+             */
+            jobId: string;
+            /** @description Business records delivered. */
+            recordCount: number;
+            /** @description Credits the search was charged, in the credits `capCredits` uses. */
+            creditsCharged: number;
+            /**
+             * Format: date-time
+             * @description When this event was sent (RFC 3339), not when the search ended: an event sent again with `POST /jobs/{id}/deliver` carries the time it was sent again.
+             */
+            completedAt: string;
+            /**
+             * @description How the search ended, in the event's own words (not `SearchStatus`). `complete`: it finished. `incomplete`: it delivered what it found but could not search part of the area. `aborted`: it was cancelled and delivered what it had found.
+             * @enum {string}
+             */
+            status: "complete" | "incomplete" | "aborted";
+            /** @description Download links, each working for 7 days after the event is sent. Null when links could not be made; read the search with `GET /jobs/{id}` for them. */
+            downloads: components["schemas"]["Downloads"] | null;
+            /**
+             * @description One sentence describing the result, for people. Do not parse it.
+             * @example Your extraction is complete. 120 records are ready to download.
+             */
+            summary: string;
+            /**
+             * @description Present, and true, only on an event sent again with `POST /jobs/{id}/deliver`.
+             * @enum {boolean}
+             */
+            redelivered?: true;
+        };
+        /**
+         * @description The body of a test event.
+         * @example {
+         *       "event": "webhook.test",
+         *       "message": "This is a test event from Live Map Leads.",
+         *       "sentAt": "2026-06-12T14:30:00Z"
+         *     }
+         */
+        WebhookTestEvent: {
+            /** @enum {string} */
+            event: "webhook.test";
+            /** @description A sentence saying this is a test. */
+            message: string;
+            /** Format: date-time */
+            sentAt: string;
+        };
+        /**
+         * @description Your credits, your running searches, and the key you are calling with. Credits are the same credits `capCredits` and `creditsCharged` count.
+         * @example {
+         *       "credits": {
+         *         "free": 1200,
+         *         "held": 300,
+         *         "balance": 1500
+         *       },
+         *       "runningSearches": {
+         *         "count": 1,
+         *         "limit": 3,
+         *         "heavySlotFree": true
+         *       },
+         *       "key": {
+         *         "name": "Zapier",
+         *         "permission": "full"
+         *       }
+         *     }
+         */
+        Account: {
+            credits: {
+                /** @description Credits a new search can use now: your balance less what your running searches hold. */
+                free: number;
+                /** @description Credits your running searches hold between them. A search is charged only for what it delivers, and the rest is released when it ends. */
+                held: number;
+                /** @description Every credit you own, `free` plus `held`. */
+                balance: number;
+            };
+            runningSearches: {
+                /** @description How many of your searches are running now. */
+                count: number;
+                /** @description The most searches you can run at once. */
+                limit: number;
+                /** @description True when none of your running searches collects emails or extra details, so a search that does can start (when `count` is also below `limit`). Only one such search runs at a time. */
+                heavySlotFree: boolean;
+            };
+            key: {
+                /** @description The name the key was given when it was created. */
+                name: string | null;
+                /**
+                 * @description `full`: it may read and change everything, including starting searches. `read`: it may only read. `custom`: a set of permissions that is neither; account settings never create one.
+                 * @enum {string}
+                 */
+                permission: "full" | "read" | "custom";
+            };
+        };
+        CategoryList: {
+            /**
+             * @description The list's version. It changes whenever the list does, whatever `q` and `limit` were.
+             * @example 3f2a9c0e71b4d5a8
+             */
+            version: string;
+            /** @description How many categories matched, before `limit`. */
+            total: number;
+            /**
+             * @description The matching category names, each exactly as `POST /jobs` accepts it in `categories`.
+             * @example [
+             *       "dentist",
+             *       "dental clinic",
+             *       "cosmetic dentist"
+             *     ]
+             */
+            categories: string[];
         };
         Error: {
             /**
@@ -195,7 +1330,7 @@ export interface components {
              * @example invalid_request
              */
             error: string;
-            /** @description Human-readable explanation. Do not parse — read `error`. */
+            /** @description Human-readable explanation. Do not parse it; read `error`. */
             message: string;
         };
     };
@@ -203,6 +1338,9 @@ export interface components {
         /** @description The request body or query failed validation (e.g. unknown category, both location forms supplied, value out of range). */
         BadRequest: {
             headers: {
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
                 [name: string]: unknown;
             };
             content: {
@@ -210,6 +1348,84 @@ export interface components {
                  * @example {
                  *       "error": "invalid_request",
                  *       "message": "Provide exactly one of locationQuery or customGeolocation."
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The request failed validation, or the location is outside the countries the service covers. Branch on `error`: `invalid_request` (body, or the Idempotency-Key header, failed validation, including a personal-data add-on without `personalDataAttestation: true`), `location_not_supported` (the area or place is in, or reaches into, the EU, EEA or UK, a place refused for its data protection laws, or a sanctioned country or region, or it reaches Cuba with an option not available there), `location_not_resolved` (the location could not be placed in any country), `add_on_unavailable_in_area` (the search reaches a country where decision-maker leads, verified emails or reviewer names are not available: turn that add-on off, the area is fine), `unknown_webhook` (an id in `deliverTo` is not one of your webhooks). */
+        StartSearchBadRequest: {
+            headers: {
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Your running searches leave no room for this one: three are running, or one that collects emails or extra details is running and this one would too (`too_many_running_searches`). `search_already_running` is kept for clients written against version 1.1.0. Nothing was started and no credits were used; start this search again once a running one has finished. */
+        SearchAlreadyRunning: {
+            headers: {
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Your free credits (your balance less what your running searches hold) cannot start this search. Nothing was started and no credits were used. Buy credits, wait for a running search to finish, or set `capCredits` on your searches so they hold less while they run. */
+        InsufficientCredits: {
+            headers: {
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": "insufficient_credits",
+                 *       "message": "This search needs at least 1 credit, and you have 0. Buy credits to start it."
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The Idempotency-Key was already used in the last 24 hours for a request with a different body. Nothing was started; use a new key for a new search. */
+        IdempotencyKeyReused: {
+            headers: {
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": "idempotency_key_reused",
+                 *       "message": "This request key was already used for a different search. Use a new key to start a new search."
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The text location could not be checked against the covered countries just now. Nothing was started; retry shortly. */
+        LocationCheckUnavailable: {
+            headers: {
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": "location_check_unavailable",
+                 *       "message": "We couldn't check that location just now. Try again in a minute."
                  *     }
                  */
                 "application/json": components["schemas"]["Error"];
@@ -230,11 +1446,224 @@ export interface components {
                 "application/json": components["schemas"]["Error"];
             };
         };
-        /** @description Rate limit exceeded for this key. */
+        /** @description The key is valid but does not hold the permission this request needs, for example a read-only key starting a search. Answered before the rate limit is counted, so it carries no RateLimit headers. */
+        Forbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": "forbidden",
+                 *       "message": "This API key does not have the searches:write permission this request needs."
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Branch on `error`. `forbidden`: the key is valid but does not hold the searches:write permission (a read-only key); answered before the rate limit is counted, so it carries no RateLimit headers. `terms_not_accepted`: the account holder has not accepted the current Terms of Service; they accept in the app, then the search can be retried. Answered after the rate limit, so it carries RateLimit headers. */
+        StartSearchForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The key is valid but its stored permissions do not include reading searches. Every full and read-only key can read, so this answers only a key whose stored permissions are missing, malformed, or a custom set without `searches:read`. Answered before the rate limit is counted, so it carries no RateLimit headers. */
+        ListForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": "forbidden",
+                 *       "message": "This API key does not have the searches:read permission this request needs."
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description No search with this id belongs to your account: it does not exist, or another account started it. The two are not told apart. */
+        SearchNotFound: {
+            headers: {
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": "not_found",
+                 *       "message": "No search with this id belongs to your account."
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The search cannot be cancelled. Branch on `error`: `already_finished` (it has ended; read it for the outcome), `not_started` (it has not started running yet; retry in a moment), `too_late` (it had finished, or is being charged and delivered, when the cancel arrived; it ends as usual and is charged for what it delivers). Nothing was changed. */
+        CancelConflict: {
+            headers: {
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The request failed validation. Branch on `error`: `invalid_request` (a field, or the URL, was rejected; the message says which) or `unknown_webhook` (an id in `webhookIds` is not one of your webhooks). Nothing was changed or sent. */
+        WebhookBadRequest: {
+            headers: {
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The key is valid but its stored permissions do not include reading webhooks. Every full and read-only key can read, so this answers only a key whose stored permissions are missing, malformed, or a custom set without `webhooks:read`. Answered before the rate limit is counted, so it carries no RateLimit headers. */
+        WebhooksReadForbidden: {
+            headers: {
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": "forbidden",
+                 *       "message": "This API key does not have the webhooks:read permission this request needs."
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description No webhook with this id belongs to your account: it does not exist, or another account created it. The two are not told apart. */
+        WebhookNotFound: {
+            headers: {
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": "not_found",
+                 *       "message": "No webhook with this id belongs to your account."
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Your account already has 20 webhooks, the most it can have. Nothing was created; delete one to add another. */
+        WebhookLimitReached: {
+            headers: {
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": "webhook_limit_reached",
+                 *       "message": "Your account already has 20 webhooks, the most it can have. Delete one to add another."
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description There is nothing to send for this search. Branch on `error`: `not_finished` (it is still queued or running; try again once it has ended) or `nothing_to_deliver` (it ended without results to send: it failed, or was cancelled before it kept anything). Nothing was sent. */
+        RedeliverConflict: {
+            headers: {
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The search's results are no longer kept (90 days after it finished), so there is nothing to send. Nothing was sent. */
+        ExportExpired: {
+            headers: {
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": "export_expired",
+                 *       "message": "This search's results have expired. Results are kept for 90 days after a search finishes."
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description There are no records to preview for this search. Branch on `error`: `not_finished` (it is still queued or running; try again once it has ended) or `nothing_to_deliver` (it ended without results: it failed, or was cancelled before it kept anything). */
+        RecordsConflict: {
+            headers: {
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                [name: string]: unknown;
+            };
+            content: {
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description The search's results are no longer kept (90 days after it finished), so there is nothing to preview. */
+        RecordsExpired: {
+            headers: {
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": "export_expired",
+                 *       "message": "This search's results have expired. Results are kept for 90 days after a search finishes."
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Something failed on our side while handling the request. Nothing about the failure is returned. Try again later. When the rate limit itself could not be checked, the response carries no RateLimit headers. */
+        InternalError: {
+            headers: {
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                [name: string]: unknown;
+            };
+            content: {
+                /**
+                 * @example {
+                 *       "error": "internal_error",
+                 *       "message": "Something went wrong on our side. Try again later."
+                 *     }
+                 */
+                "application/json": components["schemas"]["Error"];
+            };
+        };
+        /** @description Rate limit exceeded: this key's 60 requests a minute, or one of the account's own limits (20 starts, 10 cancels or 10 redeliveries a minute, or 30 webhook changes and tests a minute). Wait `Retry-After` seconds. */
         TooManyRequests: {
             headers: {
                 /** @description Seconds to wait before retrying. */
                 "Retry-After"?: number;
+                "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
                 [name: string]: unknown;
             };
             content: {
@@ -248,9 +1677,27 @@ export interface components {
             };
         };
     };
-    parameters: never;
+    parameters: {
+        /** @description The search's `jobId`, as its start returned it. */
+        SearchId: string;
+        /** @description The webhook's `id`, as its create returned it. */
+        WebhookId: string;
+    };
     requestBodies: never;
-    headers: never;
+    headers: {
+        /** @description Requests this key may make in the current window. */
+        "RateLimit-Limit": number;
+        /** @description Requests this key has left in the current window. */
+        "RateLimit-Remaining": number;
+        /** @description Seconds until the current one-minute window resets. */
+        "RateLimit-Reset": number;
+        /** @description Identifies this answer: it changes when the category list does, and differs between values of `q` and `limit`. Send it back in `If-None-Match` on the same request to get a `304` while the answer is unchanged. It is not the body's `version`. */
+        CategoryListETag: string;
+        /** @description `public, no-cache`: any cache may keep the list, but must check it here (with `If-None-Match`) before each reuse. */
+        CategoryListCacheControl: string;
+        /** @description `x-api-key`: a cache keeps a separate copy for each key. */
+        CategoryListVary: string;
+    };
     pathItems: never;
 }
 export type $defs = Record<string, never>;
@@ -260,7 +1707,10 @@ export interface operations {
             query?: {
                 /**
                  * @description Lifecycle filter. v1 supports only `completed` (the value a polling
-                 *     trigger needs); it is also the default.
+                 *     trigger needs); it is also the default. It returns every finished
+                 *     search that delivered results: items with `status: "completed"` and,
+                 *     where part of the requested area could not be covered, items with
+                 *     `status: "incomplete"`.
                  */
                 status?: "completed";
                 /**
@@ -280,6 +1730,9 @@ export interface operations {
             /** @description A page of completed searches, newest first. */
             200: {
                 headers: {
+                    "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                    "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                    "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
                     [name: string]: unknown;
                 };
                 content: {
@@ -288,10 +1741,53 @@ export interface operations {
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ListForbidden"];
             429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
         };
     };
     startSearch: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Optional. 1 to 255 visible ASCII characters; a UUID per search you mean to start is the usual choice. A repeat within 24 hours with the same key and body returns the first search instead of starting another. */
+                "Idempotency-Key"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["StartSearchRequest"];
+            };
+        };
+        responses: {
+            /** @description Search accepted and queued, or, for a repeat of an earlier request with the same Idempotency-Key and body, that earlier search. */
+            202: {
+                headers: {
+                    "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                    "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                    "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                    /** @description "true" when this response repeats an earlier request's search (same Idempotency-Key and body); absent on a new search. */
+                    "Idempotent-Replayed"?: "true";
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["StartSearchResponse"];
+                };
+            };
+            400: components["responses"]["StartSearchBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            402: components["responses"]["InsufficientCredits"];
+            403: components["responses"]["StartSearchForbidden"];
+            409: components["responses"]["SearchAlreadyRunning"];
+            422: components["responses"]["IdempotencyKeyReused"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["LocationCheckUnavailable"];
+        };
+    };
+    estimateSearch: {
         parameters: {
             query?: never;
             header?: never;
@@ -304,18 +1800,530 @@ export interface operations {
             };
         };
         responses: {
-            /** @description Search accepted and queued. */
-            202: {
+            /** @description The estimate for this search. */
+            200: {
                 headers: {
+                    "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                    "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                    "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["StartSearchResponse"];
+                    "application/json": components["schemas"]["SearchEstimate"];
+                };
+            };
+            400: components["responses"]["StartSearchBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            402: components["responses"]["InsufficientCredits"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["SearchAlreadyRunning"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+            503: components["responses"]["LocationCheckUnavailable"];
+        };
+    };
+    listSearchHistory: {
+        parameters: {
+            query?: {
+                /** @description Only searches in these states. Repeat it for more than one; leave it out for every state. */
+                status?: components["schemas"]["SearchStatus"][];
+                /** @description Maximum number of searches to return. */
+                limit?: number;
+                /** @description The `nextCursor` of the previous page, passed back unchanged. Leave it out to start from the newest search. A cursor this API did not return is rejected with `400`. */
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description A page of searches, newest created first. */
+            200: {
+                headers: {
+                    "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                    "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                    "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SearchHistory"];
                 };
             };
             400: components["responses"]["BadRequest"];
             401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ListForbidden"];
             429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getSearch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The search's `jobId`, as its start returned it. */
+                id: components["parameters"]["SearchId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The search. */
+            200: {
+                headers: {
+                    "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                    "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                    "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Search"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ListForbidden"];
+            404: components["responses"]["SearchNotFound"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    cancelSearch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The search's `jobId`, as its start returned it. */
+                id: components["parameters"]["SearchId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The cancel was accepted. The search is stopping (or has just ended); read it later for the outcome. */
+            202: {
+                headers: {
+                    "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                    "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                    "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Search"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["SearchNotFound"];
+            409: components["responses"]["CancelConflict"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    redeliverSearch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The search's `jobId`, as its start returned it. */
+                id: components["parameters"]["SearchId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RedeliverSearchRequest"];
+            };
+        };
+        responses: {
+            /** @description The event was sent; the counts say how each webhook answered. */
+            200: {
+                headers: {
+                    "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                    "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                    "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Redelivery"];
+                };
+            };
+            400: components["responses"]["WebhookBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["SearchNotFound"];
+            409: components["responses"]["RedeliverConflict"];
+            410: components["responses"]["ExportExpired"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    previewSearchRecords: {
+        parameters: {
+            query?: {
+                /** @description How many records to return, from 1 to 100. Defaults to 10. */
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                /** @description The search's `jobId`, as its start returned it. */
+                id: components["parameters"]["SearchId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The first records of the search. */
+            200: {
+                headers: {
+                    /** @description `private, no-store`: the records hold contact details, so no cache keeps them. */
+                    "Cache-Control"?: string;
+                    "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                    "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                    "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordPreview"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ListForbidden"];
+            404: components["responses"]["SearchNotFound"];
+            409: components["responses"]["RecordsConflict"];
+            410: components["responses"]["RecordsExpired"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listWebhooks: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Your webhooks. */
+            200: {
+                headers: {
+                    "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                    "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                    "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookList"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["WebhooksReadForbidden"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    createWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateWebhookRequest"];
+            };
+        };
+        responses: {
+            /** @description The webhook, and its signing secret (shown once). */
+            201: {
+                headers: {
+                    "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                    "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                    "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookCreated"];
+                };
+            };
+            400: components["responses"]["WebhookBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            409: components["responses"]["WebhookLimitReached"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The webhook's `id`, as its create returned it. */
+                id: components["parameters"]["WebhookId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The webhook. */
+            200: {
+                headers: {
+                    "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                    "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                    "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Webhook"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["WebhooksReadForbidden"];
+            404: components["responses"]["WebhookNotFound"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    deleteWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The webhook's `id`, as its create returned it. */
+                id: components["parameters"]["WebhookId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                    "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                    "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["WebhookNotFound"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    updateWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The webhook's `id`, as its create returned it. */
+                id: components["parameters"]["WebhookId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateWebhookRequest"];
+            };
+        };
+        responses: {
+            /** @description The webhook as changed, and the new secret if this request rotated it. */
+            200: {
+                headers: {
+                    "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                    "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                    "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookUpdated"];
+                };
+            };
+            400: components["responses"]["WebhookBadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["WebhookNotFound"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    testWebhook: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The webhook's `id`, as its create returned it. */
+                id: components["parameters"]["WebhookId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The test event was attempted. `delivered` says whether your endpoint accepted it. */
+            200: {
+                headers: {
+                    "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                    "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                    "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WebhookTestResult"];
+                };
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["Forbidden"];
+            404: components["responses"]["WebhookNotFound"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    getAccount: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Your account. */
+            200: {
+                headers: {
+                    "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                    "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                    "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Account"];
+                };
+            };
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ListForbidden"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    listCategories: {
+        parameters: {
+            query?: {
+                /** @description Words to look for at the start of words in a category's name. At most 100 characters (Unicode code points). */
+                q?: string;
+                /** @description The most names to return. Leave it out to get every match. */
+                limit?: number;
+            };
+            header?: {
+                /** @description The `ETag` of the answer you hold to this same request. While that answer is unchanged, you get `304` with no body. */
+                "If-None-Match"?: string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The matching categories. */
+            200: {
+                headers: {
+                    ETag: components["headers"]["CategoryListETag"];
+                    "Cache-Control": components["headers"]["CategoryListCacheControl"];
+                    Vary: components["headers"]["CategoryListVary"];
+                    "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                    "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                    "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CategoryList"];
+                };
+            };
+            /** @description The answer is unchanged since the `ETag` sent in `If-None-Match`. No body; keep using the answer you hold. */
+            304: {
+                headers: {
+                    ETag: components["headers"]["CategoryListETag"];
+                    "Cache-Control": components["headers"]["CategoryListCacheControl"];
+                    Vary: components["headers"]["CategoryListVary"];
+                    "RateLimit-Limit": components["headers"]["RateLimit-Limit"];
+                    "RateLimit-Remaining": components["headers"]["RateLimit-Remaining"];
+                    "RateLimit-Reset": components["headers"]["RateLimit-Reset"];
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            400: components["responses"]["BadRequest"];
+            401: components["responses"]["Unauthorized"];
+            403: components["responses"]["ListForbidden"];
+            429: components["responses"]["TooManyRequests"];
+            500: components["responses"]["InternalError"];
+        };
+    };
+    searchCompletedEvent: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The event's id. The same for every attempt of one automatic delivery to one webhook; new for every `POST /jobs/{id}/deliver` and every test. */
+                "webhook-id": string;
+                /** @description When the event was signed, in Unix seconds. */
+                "webhook-timestamp": string;
+                /** @description `v1,` followed by the base64 HMAC-SHA256 signature (Standard Webhooks). See the `searchCompleted` webhook for how to check it. */
+                "webhook-signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SearchCompletedEvent"];
+            };
+        };
+        responses: {
+            /** @description Your endpoint accepted the event. */
+            "2XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    webhookTestEvent: {
+        parameters: {
+            query?: never;
+            header: {
+                /** @description The event's id. The same for every attempt of one automatic delivery to one webhook; new for every `POST /jobs/{id}/deliver` and every test. */
+                "webhook-id": string;
+                /** @description When the event was signed, in Unix seconds. */
+                "webhook-timestamp": string;
+                /** @description `v1,` followed by the base64 HMAC-SHA256 signature (Standard Webhooks). See the `searchCompleted` webhook for how to check it. */
+                "webhook-signature": string;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WebhookTestEvent"];
+            };
+        };
+        responses: {
+            /** @description Your endpoint accepted the test event. */
+            "2XX": {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
         };
     };
 }
